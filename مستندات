@@ -66,5 +66,95 @@
 · افزایش بهره‌وری پرسنل
 · کاهش ریسک امنیتی
 · مقیاس‌پذیری عالی برای توسعه آینده
+گام ۱: پیکربندی FortiWeb WAF
 
-این طرح اگرچه هزینه اولیه بالاتری دارد، اما در بلندمدت با افزایش امنیت، کارایی و قابلیت اطمینان، بازگشت سرمایه بسیار خوبی خواهد داشت.
+۱. ایجاد Interfaceهای لازم:
+
+```bash
+config system interface
+    edit "port1"  # اینترنت
+        set mode static
+        set ip 192.168.100.10 255.255.255.0
+    next
+    edit "port2"  # LAN داخلی
+        set mode static
+        set ip 10.0.1.1 255.255.255.0
+    next
+    edit "port3"  # VPN Termination
+        set mode static
+        set ip 172.16.100.1 255.255.255.0
+    next
+end
+```
+
+۲. فعال‌سازی IPSec VPN روی FortiWeb:
+
+```bash
+config vpn ipsec phase1-interface
+    edit "to-branch1"
+        set type static
+        set interface "port3"
+        set local-gw 172.16.100.1
+        set remote-gw 1.1.1.1  # IP Public شعبه 1
+        set psk-secret "YourStrongPSK123"
+        set proposal aes256-sha256
+    next
+    edit "to-branch2"
+        set type static
+        set interface "port3"
+        set local-gw 172.16.100.1
+        set remote-gw 2.2.2.2  # IP Public شعبه 2
+        set psk-secret "YourStrongPSK123"
+        set proposal aes256-sha256
+    next
+end
+```
+
+۳. ایجاد Phase2:
+
+```bash
+config vpn ipsec phase2-interface
+    edit "to-branch1-p2"
+        set phase1name "to-branch1"
+        set proposal aes256-sha256
+        set src-addr-type subnet
+        set dst-addr-type subnet
+        set src-subnet 10.0.1.0 255.255.255.0  # شبکه مرکز
+        set dst-subnet 10.1.1.0 255.255.255.0  # شبکه شعبه 1
+    next
+end
+```
+
+۴. ایجاد Policy برای عبور ترافیک:
+
+```bash
+config firewall policy
+    edit 1
+        set name "Branch1-to-Internet"
+        set srcintf "to-branch1"
+        set dstintf "port1"
+        set srcaddr "Branch1-Network"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set nat enable
+    next
+end
+```
+
+---
+
+گام ۲: پیکربندی Kerio Control در شعبات
+
+تغییرات در هر شعبه:
+
+```
+Connection Name: To-FortiWeb-Test
+Remote Site Type: IP Address
+Remote Site Address: [IP Public FortiWeb]
+Local Network: 10.1.1.0/24  # شبکه شعبه
+Remote Network: 0.0.0.0/0   # یا شبکه‌های خاص
+Authentication: Pre-shared Key
+Key: [همان کلید FortiWeb]
+```
