@@ -1,1 +1,476 @@
 
+این سناریو صرفا هم جهت تحقیق و بررسی اینکه بدون خرید تجهیز فورتی برای شعبات هم اکنون چگونه سناریوی ترکیبی را پیده سازی کنیم  که تقدیم حضور مدیریت واحد انفورماتیک شرکت صنایع لفاف زرین میگردد البته این سناذیو کاملا تستی و با آدرسهای فرضی اجراو بررسی گردید
+هدف در این سناریو این است که کلیه شبکه لوکال دفتر مرکزی قبل از ارتباط به سرورها از لحاظ امنیتی هنگان روتینگ بین ترانک شبکه داخلی و ترانک شبکه سرور فارم که هم اکنون هر پورت سرور شما مختص به یک وی لن بوده و استاندارد سوئیچ میباشذ و همچنین شعبات شما از طریق کریو کنترل های موجود در آن شعبه بواسطه ارتباط امن و عبور از فایروال فورتی وب و استفاده از قابلیتهای آن به فورتی گیت سرورفارم وارد شده و در نهایت به سوئیچ سرورفارم منتهی میگردد
+🏗️ طراحی کامل لابراتوار GNS3
+
+توپولوژی کلی:
+
+```
+[ Kerio Control 1 ] ---(WAN1)---+
+[ Kerio Control 2 ] ---(WAN2)---+---[ FortiWeb WAF ]---[ FortiGate Server Farm ]
+[ Kerio Control 3 ] ---(WAN3)---+           |                    |
+[ Kerio Control 4 ] ---(WAN4)---+     [ Internet Cloud ]    [ Core Switch 3750 ]
+[ Kerio Control 5 ] ---(WAN5)---+           |                    |
+                                      [ Captive Portal ]    [ Access Switch 3750 ]
+```
+
+---
+
+🔧 پیکربندی جزئیات شبکه
+
+۱. بخش WAN و Kerio Controls
+
+آیپی‌دهی Kerio Controls:
+
+```bash
+# Kerio Control 1:
+WAN IP: 109.20.10.10/24
+LAN IP: 192.168.1.1/24
+
+# Kerio Control 2:  
+WAN IP: 109.20.10.11/24
+LAN IP: 192.168.2.1/24
+
+# Kerio Control 3:
+WAN IP: 109.20.10.12/24
+LAN IP: 192.168.3.1/24
+
+# Kerio Control 4:
+WAN IP: 109.20.10.13/24
+LAN IP: 192.168.4.1/24
+
+# Kerio Control 5:
+WAN IP: 109.20.10.14/24
+LAN IP: 192.168.5.1/24
+```
+
+پیکربندی Kerio برای SD-WAN:
+
+```bash
+# در هر Kerio - Traffic Rules برای Load Balancing
+Configuration > Traffic Rules > New Rule:
+- Source: LAN Network
+- Destination: Any  
+- Service: Any
+- Action: Allow + Load Balance
+- Gateway: Multiple WANs (Weighted Round Robin)
+```
+
+۲. پیکربندی FortiWeb WAF
+
+Interfaces Configuration:
+
+```bash
+config system interface
+    # WAN Interfaces برای Kerioها
+    edit "port1"
+        set vdom "root"
+        set ip 109.20.10.1 255.255.255.0
+        set type physical
+    next
+    edit "port2"
+        set vdom "root" 
+        set ip 109.20.10.2 255.255.255.0
+        set type physical
+    next
+    edit "port3"
+        set vdom "root"
+        set ip 109.20.10.3 255.255.255.0
+        set type physical
+    next
+    edit "port4"
+        set vdom "root"
+        set ip 109.20.10.4 255.255.255.0
+        set type physical
+    next
+    edit "port5"
+        set vdom "root"
+        set ip 109.20.10.5 255.255.255.0
+        set type physical
+    next
+    
+    # Link به FortiGate Server Farm
+    edit "port6"
+        set vdom "root"
+        set ip 10.255.255.1 255.255.255.252
+        set type physical
+    next
+    
+    # DMZ Interface
+    edit "port7"
+        set vdom "root"
+        set ip 172.16.255.1 255.255.255.0
+        set type physical
+    next
+end
+```
+
+SD-WAN Configuration روی FortiWeb:
+
+```bash
+config system sdwan
+    set status enable
+    config zone
+        edit "kerio-wan-zone"
+            set service-sla-tie-break latency
+        next
+    end
+    
+    # Member Interfaces
+    config members
+        edit 1
+            set interface "port1"
+            set zone "kerio-wan-zone"
+            set cost 10
+        next
+        edit 2
+            set interface "port2" 
+            set zone "kerio-wan-zone"
+            set cost 10
+        next
+        edit 3
+            set interface "port3"
+            set zone "kerio-wan-zone" 
+            set cost 10
+        next
+        edit 4
+            set interface "port4"
+            set zone "kerio-wan-zone"
+            set cost 10
+        next
+        edit 5
+            set interface "port5"
+            set zone "kerio-wan-zone"
+            set cost 10
+        next
+    end
+    
+    # Health Check
+    config health-check
+        edit "Kerio-Link-Check"
+            set server "8.8.8.8" "1.1.1.1"
+            set members 1 2 3 4 5
+            config sla
+                edit 1
+                    set latency-threshold 200
+                next
+            end
+        next
+    end
+    
+    # SD-WAN Rules
+    config service
+        edit 1
+            set name "Web-Traffic"
+            set dst "all"
+            set src "109.20.10.0/24"
+            set priority-zone "kerio-wan-zone"
+            set use-shortcut-sla enable
+        next
+    end
+end
+```
+
+۳. پیکربندی FortiGate Server Farm
+
+Interfaces Configuration:
+
+```bash
+config system interface
+    # Link از FortiWeb
+    edit "port1"
+        set vdom "root"
+        set ip 10.255.255.2 255.255.255.252
+        set type physical
+    next
+    
+    # Trunk به Core Switch 3750
+    edit "port2"
+        set vdom "root"
+        set type aggregate
+        set member "port2" "port3"
+        set lacp-mode static
+    next
+    
+    # Trunk به Access Switch 3750  
+    edit "port4"
+        set vdom "root"
+        set type aggregate
+        set member "port4" "port5"
+        set lacp-mode static
+    next
+end
+```
+
+VLAN Configuration روی FortiGate:
+
+```bash
+config system interface
+    # VLANهای سرورفارم (100-105)
+    edit "vlan100"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 100
+        set ip 192.168.100.1 255.255.255.0
+    next
+    edit "vlan101"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 101
+        set ip 192.168.101.1 255.255.255.0
+    next
+    edit "vlan102"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 102
+        set ip 192.168.102.1 255.255.255.0
+    next
+    edit "vlan103"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 103
+        set ip 192.168.103.1 255.255.255.0
+    next
+    edit "vlan104"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 104
+        set ip 192.168.104.1 255.255.255.0
+    next
+    edit "vlan105"
+        set vdom "root"
+        set interface "aggregate1"
+        set vlanid 105
+        set ip 192.168.105.1 255.255.255.0
+    next
+    
+    # VLANهای کاربران (10-20)
+    edit "vlan10"
+        set vdom "root"
+        set interface "aggregate2"
+        set vlanid 10
+        set ip 172.16.10.1 255.255.255.0
+    next
+    edit "vlan11"
+        set vdom "root"
+        set interface "aggregate2"
+        set vlanid 11
+        set ip 172.16.11.1 255.255.255.0
+    next
+    # ... تا vlan20
+end
+```
+
+۴. پیکربندی Cisco Catalyst 3750 Core Switch
+
+EtherChannel Configuration:
+
+```bash
+! Interface برای FortiGate
+interface Port-channel1
+ description FortiGate Server Farm Trunk
+ switchport mode trunk
+ switchport trunk native vlan 999
+ switchport trunk allowed vlan 100-105
+ spanning-tree portfast trunk
+!
+interface GigabitEthernet1/0/1
+ description FortiGate Port2
+ channel-group 1 mode active
+!
+interface GigabitEthernet1/0/2  
+ description FortiGate Port3
+ channel-group 1 mode active
+```
+
+VLAN Configuration:
+
+```bash
+! VLANهای سرورفارم
+vlan 100
+ name Server-Farm-100
+vlan 101
+ name Server-Farm-101  
+vlan 102
+ name Server-Farm-102
+vlan 103
+ name Server-Farm-103
+vlan 104
+ name Server-Farm-104
+vlan 105
+ name Server-Farm-105
+```
+
+۵. پیکربندی Active Directory (keivan.local)
+
+روی Windows Server:
+
+```powershell
+# نصب Active Directory
+Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
+
+# ایجاد دامنه جدید
+Install-ADDSForest -DomainName "keivan.local" -DomainNetbiosName "KEIVAN" -Force
+
+# ایجاد Userها برای تست
+New-ADUser -Name "testuser1" -AccountPassword (ConvertTo-SecureString "Password123!" -AsPlainText -Force) -Enabled $true
+```
+
+۶. پیکربندی Captive Portal روی FortiGate
+
+```bash
+config user setting
+    set auth-type captive
+    set auth-portal-message "Welcome to Keivan.local Network"
+end
+
+config user captive-portal
+    edit "Main-Portal"
+        set idle-timeout 300
+        set pre-login-bypass disable
+        set theme green
+        set page-layout double
+        config excluded-ranges
+            edit 1
+                set ip 172.16.10.0 255.255.255.0
+            next
+        end
+    next
+end
+```
+
+۷. پیکربندی DMZ روی FortiWeb
+
+```bash
+config system zone
+    edit "DMZ-Zone"
+        set interface "port7"
+        set intrazone-allow allow
+    next
+end
+
+config firewall policy
+    edit 1
+        set name "Kerio-to-DMZ"
+        set srcintf "port1" "port2" "port3" "port4" "port5"
+        set dstintf "port7" 
+        set srcaddr "109.20.10.0/24"
+        set dstaddr "DMZ-Servers"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set nat enable
+    next
+end
+```
+
+---
+
+🎯 سناریوهای تست و Validation
+
+تست ۱: SD-WAN Load Balancing
+
+```bash
+# از Kerio Controlها:
+ping -t 8.8.8.8
+tracert 8.8.8.8
+
+# مانیتورینگ روی FortiWeb:
+get system sdwan health-check
+get system sdwan service
+```
+
+تست ۲: VLAN Routing
+
+```bash
+# از VLAN 100 به VLAN 10:
+ping 172.16.10.10 source 192.168.100.10
+
+# بررسی routing table:
+get router info routing-table all
+```
+
+تست ۳: LDAP Authentication
+
+```bash
+# تست اتصال به AD:
+diagnose test application authd 1
+config user ldap
+edit "keivan-ldap"
+    set server "192.168.100.10"
+    set cnid "sAMAccountName"
+    set dn "DC=keivan,DC=local"
+    set type regular
+    set username "administrator"
+    set password "YourADPassword"
+next
+end
+```
+
+تست ۴: Captive Portal
+
+```bash
+# شبیه‌سازی کاربر:
+curl -I http://google.com
+# باید به captive portal redirect شود
+
+# مانیتورینگ:
+diagnose debug application fnbamd -1
+diagnose debug enable
+```
+
+---
+
+📊 داکیومنت‌های خروجی
+
+۱. Network Diagram (در Mermaid):
+
+```mermaid
+graph TB
+    KC1[Kerio Control 1] --> FW[FortiWeb WAF]
+    KC2[Kerio Control 2] --> FW
+    KC3[Kerio Control 3] --> FW  
+    KC4[Kerio Control 4] --> FW
+    KC5[Kerio Control 5] --> FW
+    
+    FW --> FGF[FortiGate Server Farm]
+    
+    FGF --> CSW[Core Switch 3750]
+    FGF --> ASW[Access Switch 3750]
+    
+    CSW --> V100[VLAN 100: 192.168.100.0/24]
+    CSW --> V101[VLAN 101: 192.168.101.0/24]
+    CSW --> V105[VLAN 105: 192.168.105.0/24]
+    
+    ASW --> V10[VLAN 10: 172.16.10.0/24]
+    ASW --> V11[VLAN 11: 172.16.11.0/24]
+    ASW --> V20[VLAN 20: 172.16.20.0/24]
+    
+    FW --> DMZ[DMZ Zone]
+    FW --> INTERNET[Internet Cloud]
+    
+    INTERNET --> CP[Captive Portal]
+```
+
+۲. Configuration Files:
+
+· FortiWeb WAF Config
+· FortiGate Server Farm Config
+· Cisco Switch Configs
+· Kerio Control Templates
+· GNS3 Project File
+
+۳. تست پلن کامل:
+
+· Connectivity Tests
+· Performance Tests
+· Security Tests
+
+
+· Kerio Control (OVA یا QCOW2)
+· FortiWeb WAF (QCOW2 از سایت فورتی‌نت)
+· FortiGate (برای سرورفارم)
+· Cisco IOS (برای سوئیچ‌های 3750)
+· Windows Server (برای Active Directory)
+· Linux/Windows (برای کلاینت‌های تست)
+
